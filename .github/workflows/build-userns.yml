@@ -13,13 +13,13 @@ env:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    timeout-minutes: 300
     steps:
-      - name: Clone kernel source at tag 20260522 (from upstream)
+      - name: Clone kernel source at tag 20260522
         run: |
           git clone --depth 1 --branch 20260522 \
             https://github.com/Star-ZER0/android_gki_kernel_5.10_common kernel
           git -C kernel rev-parse HEAD
-          ls -la kernel/arch/arm64/configs/gki_defconfig
 
       - name: Install build dependencies
         run: |
@@ -29,7 +29,15 @@ jobs:
             libssl-dev libelf-dev libncurses-dev \
             python3 zip unzip curl ca-certificates git
 
-      - name: Download AOSP clang r416183b (same as original build)
+      - name: Add 8GB swap (avoid OOM during vmlinux link)
+        run: |
+          sudo fallocate -l 8G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
+
+      - name: Download AOSP clang r416183b
         run: |
           cd kernel
           mkdir -p toolchain
@@ -45,7 +53,7 @@ jobs:
           toolchain/bin/clang --version | head -1
           echo "$PWD/toolchain/bin" >> "$GITHUB_PATH"
 
-      - name: Enable CONFIG_USER_NS (single change vs official release)
+      - name: Enable CONFIG_USER_NS
         run: |
           cd kernel
           DEFCONFIG=arch/arm64/configs/gki_defconfig
@@ -64,7 +72,9 @@ jobs:
       - name: Build kernel Image
         run: |
           cd kernel
+          date -u +"start compile: %F %T"
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- O=out -j"$(nproc)" Image
+          date -u +"finish compile: %F %T"
           ls -la out/arch/arm64/boot/Image
 
       - name: Repack AnyKernel3 zip (replace Image only)
