@@ -1,0 +1,90 @@
+name: Build dsfork kernel (CONFIG_USER_NS)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  KERNEL_TAG: "20260522"
+  ORIGINAL_ZIP: "https://github.com/Star-ZER0/android_gki_kernel_5.10_common/releases/download/20260522/AnyKernel3-android12-5.10.252-2026-04_r1-ztc1997-star0-dsfork-noroot-release-20260522.zip"
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout kernel source at release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.KERNEL_TAG }}
+          fetch-depth: 1
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison flex cpio kmod lz4 xz-utils zstd \
+            libssl-dev libelf-dev libncurses-dev \
+            python3 zip unzip curl ca-certificates git
+
+      - name: Download AOSP clang r416183b (same as original build)
+        run: |
+          mkdir -p toolchain
+          ok=0
+          for url in \
+            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android12-release/clang-r416183b.tar.gz" \
+            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/mirror-goog-main-llvm-toolchain-source/clang-r416183b.tar.gz" ; do
+            echo "trying $url"
+            if curl -fL --retry 3 -o clang.tar.gz "$url"; then ok=1; break; fi
+          done
+          [ "$ok" = 1 ]
+          tar -xzf clang.tar.gz -C toolchain
+          toolchain/bin/clang --version | head -1
+          echo "$PWD/toolchain/bin" >> "$GITHUB_PATH"
+
+      - name: Enable CONFIG_USER_NS (single change vs official release)
+        run: |
+          DEFCONFIG=arch/arm64/configs/gki_defconfig
+          sed -i '/^# CONFIG_USER_NS is not set/d' "$DEFCONFIG" || true
+          if ! grep -q '^CONFIG_USER_NS=y' "$DEFCONFIG"; then
+            printf '\n# Flatpak/bubblewrap + Docker: CONFIG_USER_NS (DroidSpaces official GKI config)\nCONFIG_USER_NS=y\n' >> "$DEFCONFIG"
+          fi
+          grep -n CONFIG_USER_NS "$DEFCONFIG"
+
+      - name: Generate gki_defconfig and verify
+        run: |
+          make ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- O=out gki_defconfig
+          grep -q '^CONFIG_USER_NS=y' out/.config && echo "OK: CONFIG_USER_NS=y" || { echo "FAIL"; exit 1; }
+
+      - name: Build kernel Image
+        run: |
+          make ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- O=out -j"$(nproc)" Image
+          ls -la out/arch/arm64/boot/Image
+
+      - name: Repack AnyKernel3 zip (replace Image only)
+        run: |
+          curl -fL -o original.zip "${{ env.ORIGINAL_ZIP }}"
+          python3 - <<'EOF'
+          import shutil, zipfile
+          shutil.copy('original.zip', 'release.zip')
+          tmp = 'release_new.zip'
+          with zipfile.ZipFile('release.zip', 'r') as zin, \
+               zipfile.ZipFile(tmp, 'w', zipfile.ZIP_DEFLATED) as zout:
+              for item in zin.infolist():
+                  data = zin.read(item.filename)
+                  if item.filename == 'Image':
+                      data = open('out/arch/arm64/boot/Image','rb').read()
+                      print(f'replaced Image ({len(data)} bytes)')
+                  zout.writestr(item, data)
+          shutil.move(tmp, 'release.zip')
+          EOF
+          mv release.zip "AnyKernel3-5.10.252-dsfork-userns-20260522.zip"
+          ls -la *.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AnyKernel3-dsfork-userns
+          path: AnyKernel3-5.10.252-dsfork-userns-20260522.zip
+          if-no-files-found: error
