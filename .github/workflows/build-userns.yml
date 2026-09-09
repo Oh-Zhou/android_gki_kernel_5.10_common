@@ -14,11 +14,12 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
-      - name: Checkout kernel source at release tag
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ env.KERNEL_TAG }}
-          fetch-depth: 1
+      - name: Clone kernel source at tag 20260522 (from upstream)
+        run: |
+          git clone --depth 1 --branch 20260522 \
+            https://github.com/Star-ZER0/android_gki_kernel_5.10_common kernel
+          git -C kernel rev-parse HEAD
+          ls -la kernel/arch/arm64/configs/gki_defconfig
 
       - name: Install build dependencies
         run: |
@@ -30,6 +31,7 @@ jobs:
 
       - name: Download AOSP clang r416183b (same as original build)
         run: |
+          cd kernel
           mkdir -p toolchain
           ok=0
           for url in \
@@ -45,6 +47,7 @@ jobs:
 
       - name: Enable CONFIG_USER_NS (single change vs official release)
         run: |
+          cd kernel
           DEFCONFIG=arch/arm64/configs/gki_defconfig
           sed -i '/^# CONFIG_USER_NS is not set/d' "$DEFCONFIG" || true
           if ! grep -q '^CONFIG_USER_NS=y' "$DEFCONFIG"; then
@@ -54,16 +57,19 @@ jobs:
 
       - name: Generate gki_defconfig and verify
         run: |
+          cd kernel
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- O=out gki_defconfig
           grep -q '^CONFIG_USER_NS=y' out/.config && echo "OK: CONFIG_USER_NS=y" || { echo "FAIL"; exit 1; }
 
       - name: Build kernel Image
         run: |
+          cd kernel
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- O=out -j"$(nproc)" Image
           ls -la out/arch/arm64/boot/Image
 
       - name: Repack AnyKernel3 zip (replace Image only)
         run: |
+          cd kernel
           curl -fL -o original.zip "${{ env.ORIGINAL_ZIP }}"
           python3 - <<'EOF'
           import shutil, zipfile
@@ -86,5 +92,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: AnyKernel3-dsfork-userns
-          path: AnyKernel3-5.10.252-dsfork-userns-20260522.zip
+          path: kernel/AnyKernel3-5.10.252-dsfork-userns-20260522.zip
           if-no-files-found: error
