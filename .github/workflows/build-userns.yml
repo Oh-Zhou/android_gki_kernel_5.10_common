@@ -59,10 +59,14 @@ jobs:
           toolchain/bin/clang --version | head -1
           echo "$PWD/toolchain/bin" >> "$GITHUB_PATH"
 
-      - name: Enable CONFIG_USER_NS
+      - name: Enable CONFIG_USER_NS + use ThinLTO (match official release)
         run: |
           cd kernel
           DEFCONFIG=arch/arm64/configs/gki_defconfig
+          # official release was built with ThinLTO (Full LTO link OOMs)
+          sed -i 's/^CONFIG_LTO_CLANG_FULL=y$/CONFIG_LTO_CLANG_THIN=y/' "$DEFCONFIG"
+          grep -n "CONFIG_LTO_CLANG" "$DEFCONFIG"
+          # enable user namespace (Flatpak/bubblewrap/Docker)
           sed -i '/^# CONFIG_USER_NS is not set/d' "$DEFCONFIG" || true
           if ! grep -q '^CONFIG_USER_NS=y' "$DEFCONFIG"; then
             printf '\n# Flatpak/bubblewrap + Docker: CONFIG_USER_NS (DroidSpaces official GKI config)\nCONFIG_USER_NS=y\n' >> "$DEFCONFIG"
@@ -74,6 +78,7 @@ jobs:
           cd kernel
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- O=out gki_defconfig
           grep -q '^CONFIG_USER_NS=y' out/.config && echo "OK: CONFIG_USER_NS=y" || { echo "FAIL"; exit 1; }
+          grep -q '^CONFIG_LTO_CLANG_THIN=y' out/.config && echo "OK: ThinLTO" || echo "WARN: not ThinLTO"
 
       - name: Build kernel Image
         run: |
