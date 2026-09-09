@@ -29,12 +29,18 @@ jobs:
             libssl-dev libelf-dev libncurses-dev \
             python3 zip unzip curl ca-certificates git
 
-      - name: Add 8GB swap (avoid OOM during vmlinux link)
+      - name: Check memory / ensure swap available
         run: |
-          sudo fallocate -l 8G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
+          echo "== memory before build =="
+          free -h
+          echo "== active swap =="
+          swapon --show || true
+          if ! swapon --show 2>/dev/null | grep -q swapfile; then
+            echo "no swapfile active, trying to add one..."
+            sudo mkswap -f /swapfile 2>&1 || true
+            sudo swapon /swapfile 2>&1 || echo "(swapon failed - continuing anyway)"
+          fi
+          echo "== memory after =="
           free -h
 
       - name: Download AOSP clang r416183b
