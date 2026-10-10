@@ -1,4 +1,4 @@
-name: Build dsfork kernel (CONFIG_USER_NS)
+name: Build dsfork kernel (KernelSU-Next built-in + CONFIG_USER_NS)
 
 on:
   workflow_dispatch:
@@ -8,6 +8,7 @@ permissions:
 
 env:
   KERNEL_TAG: "20260522"
+  KSUN_TAG: "v3.4.1"
   EXPECTED_RELEASE: "5.10.252-ztc1997-star0-dsfork-android12-9-00288-ga2f1cf2027f2"
   ORIGINAL_ZIP: "https://github.com/Star-ZER0/android_gki_kernel_5.10_common/releases/download/20260522/AnyKernel3-android12-5.10.252-2026-04_r1-ztc1997-star0-dsfork-noroot-release-20260522.zip"
 
@@ -56,32 +57,38 @@ jobs:
           toolchain/bin/clang --version | head -1
           echo "$PWD/toolchain/bin" >> "$GITHUB_PATH"
 
-      - name: Patch config (ThinLTO + exact version string + USER_NS)
+      - name: Integrate KernelSU-Next driver (built-in, v3.4.1 = 33333)
+        run: |
+          cd kernel
+          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/${{ env.KSUN_TAG }}/kernel/setup.sh" | bash -s "${{ env.KSUN_TAG }}"
+          echo "== drivers/kernelsu =="
+          ls -la drivers/kernelsu | head -5
+          echo "== drivers/Makefile =="; grep -n kernelsu drivers/Makefile
+          echo "== drivers/Kconfig =="; grep -n kernelsu drivers/Kconfig
+          echo "== KSUN version source =="
+          (cd KernelSU-Next && git describe --tags 2>/dev/null; git rev-list --count HEAD) || true
+
+      - name: Patch config (ThinLTO + exact version string + USER_NS + KSU)
         run: |
           cd kernel
           DEFCONFIG=arch/arm64/configs/gki_defconfig
-          # 0) empty .scmversion => kernel skips git scm detection, so the
-          #    version string has no "+"/"-dirty" suffix and matches exactly
           touch .scmversion
-          # 1) official release used ThinLTO; Full LTO link needs far too much RAM
           sed -i 's/^CONFIG_LTO_CLANG_FULL=y$/CONFIG_LTO_CLANG_THIN=y/' "$DEFCONFIG"
-          # 2) pin kernel version string to EXACTLY match the official release
-          #    (KernelSU-Next LKM / vendor modules are sensitive to it)
           sed -i 's/^CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION="-ztc1997-star0-dsfork-android12-9-00288-ga2f1cf2027f2"/' "$DEFCONFIG"
           sed -i '/^CONFIG_LOCALVERSION_AUTO=/d' "$DEFCONFIG"
           printf '# CONFIG_LOCALVERSION_AUTO is not set\n' >> "$DEFCONFIG"
-          # 3) user namespace (Flatpak/bubblewrap + Docker)
           sed -i '/^# CONFIG_USER_NS is not set/d' "$DEFCONFIG" || true
-          printf '\nCONFIG_USER_NS=y\n' >> "$DEFCONFIG"
-          grep -nE "CONFIG_LTO_CLANG|CONFIG_LOCALVERSION|CONFIG_USER_NS" "$DEFCONFIG"
+          printf '\nCONFIG_USER_NS=y\nCONFIG_KSU=y\n' >> "$DEFCONFIG"
+          grep -nE "CONFIG_LTO_CLANG|CONFIG_LOCALVERSION|CONFIG_USER_NS|CONFIG_KSU" "$DEFCONFIG"
 
       - name: Generate gki_defconfig and verify
         run: |
           cd kernel
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- O=out gki_defconfig
-          grep -q '^CONFIG_USER_NS=y' out/.config && echo "OK: USER_NS" || { echo "FAIL: USER_NS"; exit 1; }
-          grep -q '^CONFIG_LTO_CLANG_THIN=y' out/.config && echo "OK: ThinLTO" || { echo "FAIL: ThinLTO"; exit 1; }
-          grep -q "^CONFIG_LOCALVERSION=\"-ztc1997-star0-dsfork-android12-9-00288-ga2f1cf2027f2\"$" out/.config && echo "OK: LOCALVERSION" || { echo "FAIL: LOCALVERSION"; grep CONFIG_LOCALVERSION out/.config; exit 1; }
+          for c in CONFIG_USER_NS=y CONFIG_LTO_CLANG_THIN=y CONFIG_KSU=y; do
+            grep -q "^$c" out/.config && echo "OK: $c" || { echo "FAIL: $c missing"; grep -E "KSU|USER_NS|LTO_CLANG" out/.config | head; exit 1; }
+          done
+          grep -q "^CONFIG_LOCALVERSION=\"-ztc1997-star0-dsfork-android12-9-00288-ga2f1cf2027f2\"$" out/.config && echo "OK: LOCALVERSION" || { echo "FAIL: LOCALVERSION"; exit 1; }
 
       - name: Build kernel Image
         run: |
@@ -89,8 +96,7 @@ jobs:
           date -u +"start compile: %F %T"
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- O=out -j"$(nproc)" Image
           date -u +"finish compile: %F %T"
-          echo "== built kernel release string =="
-          cat out/include/config/kernel.release
+          echo "== built kernel release string =="; cat out/include/config/kernel.release
           test "$(cat out/include/config/kernel.release)" = "${{ env.EXPECTED_RELEASE }}" && echo "OK: version string matches official release" || { echo "FAIL: version string mismatch"; exit 1; }
           ls -la out/arch/arm64/boot/Image
 
@@ -112,12 +118,12 @@ jobs:
                   zout.writestr(item, data)
           shutil.move(tmp, 'release.zip')
           EOF
-          mv release.zip "AnyKernel3-5.10.252-dsfork-userns-20260522.zip"
+          mv release.zip "AnyKernel3-5.10.252-dsfork-ksun33333-userns-20260522.zip"
           ls -la *.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AnyKernel3-dsfork-userns
-          path: kernel/AnyKernel3-5.10.252-dsfork-userns-20260522.zip
+          name: AnyKernel3-dsfork-ksun-userns
+          path: kernel/AnyKernel3-5.10.252-dsfork-ksun33333-userns-20260522.zip
           if-no-files-found: error
