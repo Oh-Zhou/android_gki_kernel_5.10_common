@@ -8,6 +8,7 @@ permissions:
 
 env:
   KERNEL_TAG: "20260522"
+  EXPECTED_RELEASE: "5.10.252-ztc1997-star0-dsfork-android12-9-00288-ga2f1cf2027f2"
   ORIGINAL_ZIP: "https://github.com/Star-ZER0/android_gki_kernel_5.10_common/releases/download/20260522/AnyKernel3-android12-5.10.252-2026-04_r1-ztc1997-star0-dsfork-noroot-release-20260522.zip"
 
 jobs:
@@ -31,17 +32,13 @@ jobs:
 
       - name: Check memory / ensure swap available
         run: |
-          echo "== memory before build =="
-          free -h
-          echo "== active swap =="
+          echo "== memory before build =="; free -h
           swapon --show || true
           if ! swapon --show 2>/dev/null | grep -q swapfile; then
-            echo "no swapfile active, trying to add one..."
             sudo mkswap -f /swapfile 2>&1 || true
-            sudo swapon /swapfile 2>&1 || echo "(swapon failed - continuing anyway)"
+            sudo swapon /swapfile 2>&1 || echo "(swapon skipped)"
           fi
-          echo "== memory after =="
-          free -h
+          echo "== memory after =="; free -h
 
       - name: Download AOSP clang r416183b
         run: |
@@ -59,26 +56,25 @@ jobs:
           toolchain/bin/clang --version | head -1
           echo "$PWD/toolchain/bin" >> "$GITHUB_PATH"
 
-      - name: Enable CONFIG_USER_NS + use ThinLTO (match official release)
+      - name: Patch config (ThinLTO + exact version string + USER_NS)
         run: |
           cd kernel
           DEFCONFIG=arch/arm64/configs/gki_defconfig
-          # official release was built with ThinLTO (Full LTO link OOMs)
           sed -i 's/^CONFIG_LTO_CLANG_FULL=y$/CONFIG_LTO_CLANG_THIN=y/' "$DEFCONFIG"
-          grep -n "CONFIG_LTO_CLANG" "$DEFCONFIG"
-          # enable user namespace (Flatpak/bubblewrap/Docker)
+          sed -i 's/^CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION="-ztc1997-star0-dsfork-android12-9-00288-ga2f1cf2027f2"/' "$DEFCONFIG"
+          sed -i '/^CONFIG_LOCALVERSION_AUTO=/d' "$DEFCONFIG"
+          printf '# CONFIG_LOCALVERSION_AUTO is not set\n' >> "$DEFCONFIG"
           sed -i '/^# CONFIG_USER_NS is not set/d' "$DEFCONFIG" || true
-          if ! grep -q '^CONFIG_USER_NS=y' "$DEFCONFIG"; then
-            printf '\n# Flatpak/bubblewrap + Docker: CONFIG_USER_NS (DroidSpaces official GKI config)\nCONFIG_USER_NS=y\n' >> "$DEFCONFIG"
-          fi
-          grep -n CONFIG_USER_NS "$DEFCONFIG"
+          printf '\nCONFIG_USER_NS=y\n' >> "$DEFCONFIG"
+          grep -nE "CONFIG_LTO_CLANG|CONFIG_LOCALVERSION|CONFIG_USER_NS" "$DEFCONFIG"
 
       - name: Generate gki_defconfig and verify
         run: |
           cd kernel
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- O=out gki_defconfig
-          grep -q '^CONFIG_USER_NS=y' out/.config && echo "OK: CONFIG_USER_NS=y" || { echo "FAIL"; exit 1; }
-          grep -q '^CONFIG_LTO_CLANG_THIN=y' out/.config && echo "OK: ThinLTO" || echo "WARN: not ThinLTO"
+          grep -q '^CONFIG_USER_NS=y' out/.config && echo "OK: USER_NS" || { echo "FAIL: USER_NS"; exit 1; }
+          grep -q '^CONFIG_LTO_CLANG_THIN=y' out/.config && echo "OK: ThinLTO" || { echo "FAIL: ThinLTO"; exit 1; }
+          grep -q "^CONFIG_LOCALVERSION=\"-ztc1997-star0-dsfork-android12-9-00288-ga2f1cf2027f2\"$" out/.config && echo "OK: LOCALVERSION" || { echo "FAIL: LOCALVERSION"; exit 1; }
 
       - name: Build kernel Image
         run: |
@@ -86,6 +82,9 @@ jobs:
           date -u +"start compile: %F %T"
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- O=out -j"$(nproc)" Image
           date -u +"finish compile: %F %T"
+          echo "== built kernel release string =="
+          cat out/include/config/kernel.release
+          test "$(cat out/include/config/kernel.release)" = "${{ env.EXPECTED_RELEASE }}" && echo "OK: version string matches official release" || { echo "FAIL: version string mismatch"; exit 1; }
           ls -la out/arch/arm64/boot/Image
 
       - name: Repack AnyKernel3 zip (replace Image only)
