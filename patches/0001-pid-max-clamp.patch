@@ -1,0 +1,18 @@
+diff --git a/kernel/pid.c b/kernel/pid.c
+--- a/kernel/pid.c
++++ b/kernel/pid.c
+@@ -64,6 +64,12 @@
+ #define RESERVED_PIDS		300
+ 
+ int pid_max_min = RESERVED_PIDS + 1;
+-int pid_max_max = PID_MAX_LIMIT;
++/*
++ * Android's 32-bit bionic stores pid in 16 bits. Privileged containers
++ * (systemd >= 254 writes kernel.pid_max=4194304) can otherwise push the
++ * global limit past 65535 and break 32-bit apps and ActivityManager state.
++ * Clamp the sysctl upper bound; init still sets the default to 32768 at boot.
++ */
++int pid_max_max = 65535;
+ 
+ /*
+  * PID-map pages start out as NULL, they get allocated upon
