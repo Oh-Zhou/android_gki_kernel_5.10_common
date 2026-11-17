@@ -23,12 +23,15 @@ jobs:
             https://github.com/Star-ZER0/android_gki_kernel_5.10_common kernel
           git -C kernel rev-parse HEAD
 
-      - name: Fetch and apply pid_max clamp patch
+      - name: Fetch and apply patches
         run: |
-          curl -fL -o /tmp/0001-pid-max-clamp.patch \
-            "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/patches/0001-pid-max-clamp.patch"
-          git -C kernel apply --verbose /tmp/0001-pid-max-clamp.patch
+          RAW="https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}"
+          for p in 0001-pid-max-clamp.patch 0002-cfs-bandwidth-pelt-clock.patch; do
+            curl -fL -o "/tmp/$p" "$RAW/patches/$p"
+            git -C kernel apply --verbose "/tmp/$p"
+          done
           grep -n "pid_max_max" kernel/kernel/pid.c
+          grep -n "throttled_clock_pelt" kernel/kernel/sched/fair.c
 
       - name: Install build dependencies
         run: |
