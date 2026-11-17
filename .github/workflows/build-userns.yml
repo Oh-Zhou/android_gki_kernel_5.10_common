@@ -1,4 +1,4 @@
-name: Build dsfork kernel (KernelSU-Next built-in + CONFIG_USER_NS)
+name: Build dsfork kernel (KernelSU-Next built-in + CONFIG_USER_NS + Droidspaces)
 
 on:
   workflow_dispatch:
@@ -17,11 +17,20 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 300
     steps:
+      - name: Checkout workflow repo (for patches)
+        uses: actions/checkout@v4
+
       - name: Clone kernel source at tag 20260522
         run: |
           git clone --depth 1 --branch 20260522 \
             https://github.com/Star-ZER0/android_gki_kernel_5.10_common kernel
           git -C kernel rev-parse HEAD
+
+      - name: Apply pid_max clamp patch
+        run: |
+          cd kernel
+          git apply --verbose "$GITHUB_WORKSPACE/patches/0001-pid-max-clamp.patch"
+          grep -n "pid_max_max" pid.c
 
       - name: Install build dependencies
         run: |
@@ -68,7 +77,7 @@ jobs:
           echo "== KSUN version source =="
           (cd KernelSU-Next && git describe --tags 2>/dev/null; git rev-list --count HEAD) || true
 
-      - name: Patch config (ThinLTO + exact version string + USER_NS + KSU)
+      - name: Patch config (ThinLTO + exact version string + USER_NS + KSU + Droidspaces)
         run: |
           cd kernel
           DEFCONFIG=arch/arm64/configs/gki_defconfig
@@ -79,16 +88,21 @@ jobs:
           printf '# CONFIG_LOCALVERSION_AUTO is not set\n' >> "$DEFCONFIG"
           sed -i '/^# CONFIG_USER_NS is not set/d' "$DEFCONFIG" || true
           printf '\nCONFIG_USER_NS=y\nCONFIG_KSU=y\n' >> "$DEFCONFIG"
-          grep -nE "CONFIG_LTO_CLANG|CONFIG_LOCALVERSION|CONFIG_USER_NS|CONFIG_KSU" "$DEFCONFIG"
+          # Droidspaces v7.2.0 检查项：macvlan / IPv6 NAT / CPU limit / pids limit
+          printf '\nCONFIG_MACVLAN=y\nCONFIG_IP6_NF_NAT=y\nCONFIG_IP6_NF_TARGET_MASQUERADE=y\nCONFIG_CFS_BANDWIDTH=y\nCONFIG_CGROUP_PIDS=y\n' >> "$DEFCONFIG"
+          grep -nE "CONFIG_LTO_CLANG|CONFIG_LOCALVERSION|CONFIG_USER_NS|CONFIG_KSU|CONFIG_MACVLAN|CONFIG_IP6_NF_NAT|CONFIG_IP6_NF_TARGET_MASQUERADE|CONFIG_CFS_BANDWIDTH|CONFIG_CGROUP_PIDS" "$DEFCONFIG"
 
       - name: Generate gki_defconfig and verify
         run: |
           cd kernel
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- O=out gki_defconfig
-          for c in CONFIG_USER_NS=y CONFIG_LTO_CLANG_THIN=y CONFIG_KSU=y; do
-            grep -q "^$c" out/.config && echo "OK: $c" || { echo "FAIL: $c missing"; grep -E "KSU|USER_NS|LTO_CLANG" out/.config | head; exit 1; }
+          for c in CONFIG_USER_NS=y CONFIG_LTO_CLANG_THIN=y CONFIG_KSU=y \
+                   CONFIG_MACVLAN=y CONFIG_IP6_NF_NAT=y CONFIG_IP6_NF_TARGET_MASQUERADE=y \
+                   CONFIG_CFS_BANDWIDTH=y CONFIG_CGROUP_PIDS=y; do
+            grep -q "^$c" out/.config && echo "OK: $c" || { echo "FAIL: $c missing"; grep -E "MACVLAN|IP6_NF|CFS_BANDWIDTH|CGROUP_PIDS|USER_NS|LTO_CLANG|KSU" out/.config | head; exit 1; }
           done
           grep -q "^CONFIG_LOCALVERSION=\"-ztc1997-star0-dsfork-android12-9-00288-ga2f1cf2027f2\"$" out/.config && echo "OK: LOCALVERSION" || { echo "FAIL: LOCALVERSION"; exit 1; }
+          grep -q "int pid_max_max = 65535;" pid.c && echo "OK: pid_max clamp patch" || { echo "FAIL: pid_max patch"; exit 1; }
 
       - name: Build kernel Image
         run: |
@@ -118,12 +132,12 @@ jobs:
                   zout.writestr(item, data)
           shutil.move(tmp, 'release.zip')
           EOF
-          mv release.zip "AnyKernel3-5.10.252-dsfork-ksun33333-userns-20260522.zip"
+          mv release.zip "AnyKernel3-5.10.252-dsfork-ksun33333-droidspaces-20260522.zip"
           ls -la *.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AnyKernel3-dsfork-ksun-userns
-          path: kernel/AnyKernel3-5.10.252-dsfork-ksun33333-userns-20260522.zip
+          name: AnyKernel3-dsfork-ksun-droidspaces
+          path: kernel/AnyKernel3-5.10.252-dsfork-ksun33333-droidspaces-20260522.zip
           if-no-files-found: error
