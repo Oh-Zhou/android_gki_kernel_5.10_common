@@ -28,7 +28,7 @@ jobs:
           curl -fL -o /tmp/0001-pid-max-clamp.patch \
             "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/patches/0001-pid-max-clamp.patch"
           git -C kernel apply --verbose /tmp/0001-pid-max-clamp.patch
-          grep -n "pid_max_max" kernel/pid.c
+          grep -n "pid_max_max" kernel/kernel/pid.c
 
       - name: Install build dependencies
         run: |
@@ -100,7 +100,7 @@ jobs:
             grep -q "^$c" out/.config && echo "OK: $c" || { echo "FAIL: $c missing"; grep -E "MACVLAN|IP6_NF|CFS_BANDWIDTH|CGROUP_PIDS|USER_NS|LTO_CLANG|KSU" out/.config | head; exit 1; }
           done
           grep -q "^CONFIG_LOCALVERSION=\"-ztc1997-star0-dsfork-android12-9-00288-ga2f1cf2027f2\"$" out/.config && echo "OK: LOCALVERSION" || { echo "FAIL: LOCALVERSION"; exit 1; }
-          grep -q "int pid_max_max = 65535;" pid.c && echo "OK: pid_max clamp patch" || { echo "FAIL: pid_max patch"; exit 1; }
+          grep -q "int pid_max_max = 65535;" kernel/pid.c && echo "OK: pid_max clamp patch" || { echo "FAIL: pid_max patch"; exit 1; }
 
       - name: Build kernel Image
         run: |
